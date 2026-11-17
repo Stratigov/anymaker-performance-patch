@@ -5,6 +5,9 @@ param(
 
     [string]$GameDirectory = (Get-Location).Path,
 
+    [ValidateSet(30, 40, 50, 60)]
+    [int]$TickRate = 60,
+
     [switch]$ListProfiles
 )
 
@@ -18,25 +21,21 @@ $nearRadiusOffset = 14064461
 
 $profiles = [ordered]@{
     Balanced = [ordered]@{
-        TickRate = 40
         NearRadius = 64.0
         MidRadius = 768.0
         Description = 'Recommended: good simulation headroom without changing the medium-distance radius.'
     }
     Simulation = [ordered]@{
-        TickRate = 30
         NearRadius = 64.0
         MidRadius = 768.0
-        Description = 'Maximum simulation headroom; AI and physics update less frequently.'
+        Description = 'Legacy radius profile retained for compatibility; select tick rate separately.'
     }
     Mild = [ordered]@{
-        TickRate = 50
         NearRadius = 128.0
         MidRadius = 768.0
         Description = 'Smaller visual compromise, but less performance improvement.'
     }
     CityExperimental = [ordered]@{
-        TickRate = 40
         NearRadius = 64.0
         MidRadius = 384.0
         Description = 'Experimental city profile; distant world data may appear later.'
@@ -53,6 +52,7 @@ function Show-Profiles {
         Write-Host ("  {0}. {1}: {2}" -f $index, $name, $profiles[$name].Description)
         $index++
     }
+    Write-Host 'Tick rate is selected separately with -TickRate: 30, 40, 50 or 60 (default: 60).'
 }
 
 if ($ListProfiles) {
@@ -60,7 +60,8 @@ if ($ListProfiles) {
     exit 0
 }
 
-if (-not $Profile) {
+$profileWasSelectedInteractively = -not $Profile
+if ($profileWasSelectedInteractively) {
     Show-Profiles
     $selection = Read-Host 'Choose profile number'
     $names = @($profiles.Keys)
@@ -69,6 +70,18 @@ if (-not $Profile) {
         throw 'Invalid profile selection.'
     }
     $Profile = $names[$number - 1]
+}
+
+if ($profileWasSelectedInteractively -and $Profile -ne 'Original' -and -not $PSBoundParameters.ContainsKey('TickRate')) {
+    $tickSelection = Read-Host 'Choose tick rate: 30, 40, 50 or 60 [60]'
+    if ($tickSelection) {
+        $selectedTickRate = 0
+        if (-not [int]::TryParse($tickSelection, [ref]$selectedTickRate) -or
+            $selectedTickRate -notin @(30, 40, 50, 60)) {
+            throw 'Invalid tick rate. Choose 30, 40, 50 or 60.'
+        }
+        $TickRate = $selectedTickRate
+    }
 }
 
 $gameFile = Join-Path $GameDirectory 'bin\game.gcl'
@@ -122,7 +135,7 @@ if ([BitConverter]::ToDouble($bytes, $nearRadiusOffset) -ne 256.0) {
 }
 
 $settings = $profiles[$Profile]
-[Array]::Copy([BitConverter]::GetBytes([int]$settings.TickRate), 0, $bytes, $tickOffset, 4)
+[Array]::Copy([BitConverter]::GetBytes([int]$TickRate), 0, $bytes, $tickOffset, 4)
 [Array]::Copy([BitConverter]::GetBytes([double]$settings.MidRadius), 0, $bytes, $midRadiusOffset, 8)
 [Array]::Copy([BitConverter]::GetBytes([double]$settings.NearRadius), 0, $bytes, $nearRadiusOffset, 8)
 
@@ -130,7 +143,7 @@ $temporaryFile = "$gameFile.performance-patch.tmp"
 [IO.File]::WriteAllBytes($temporaryFile, $bytes)
 
 $verifyBytes = [IO.File]::ReadAllBytes($temporaryFile)
-if ([BitConverter]::ToInt32($verifyBytes, $tickOffset) -ne $settings.TickRate -or
+if ([BitConverter]::ToInt32($verifyBytes, $tickOffset) -ne $TickRate -or
     [BitConverter]::ToDouble($verifyBytes, $midRadiusOffset) -ne $settings.MidRadius -or
     [BitConverter]::ToDouble($verifyBytes, $nearRadiusOffset) -ne $settings.NearRadius) {
     Remove-Item -LiteralPath $temporaryFile -Force
@@ -141,8 +154,7 @@ Copy-Item -LiteralPath $temporaryFile -Destination $gameFile -Force
 Remove-Item -LiteralPath $temporaryFile -Force
 
 Write-Host "Applied profile: $Profile"
-Write-Host "Server tick rate: $($settings.TickRate)"
+Write-Host "Server tick rate: $TickRate"
 Write-Host "Near high-detail/physics radius: $($settings.NearRadius)"
 Write-Host "Medium server radius: $($settings.MidRadius)"
 Write-Host 'Save files and game executables were not modified.'
-
